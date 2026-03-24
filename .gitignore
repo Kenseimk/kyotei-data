@@ -1,4 +1,4 @@
-kyotei_data/checkpoints/
+kyotei_data/checkpoints/*.json
 __pycache__/
 *.pyc
 .venv/

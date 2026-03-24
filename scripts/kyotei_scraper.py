@@ -35,9 +35,9 @@ CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
 
 INTERVAL_MIN = 3.0      # 公式サイトなので余裕を持たせる
 INTERVAL_MAX = 6.0
-BATCH_SIZE = 50
-BATCH_REST_MIN = 30
-BATCH_REST_MAX = 60
+BATCH_SIZE = 20       # 20件ごとにチェックポイント保存
+BATCH_REST_MIN = 15
+BATCH_REST_MAX = 30
 BACKOFF_BASE = 15.0
 
 # 全24競艇場コード

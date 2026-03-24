@@ -44,6 +44,7 @@ jobs:
         run: python scripts/auto_runner.py
 
       - name: CSVをGitにコミット＆プッシュ
+        if: always()  # タイムアウト・エラー時でも必ず実行
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
