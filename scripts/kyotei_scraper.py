@@ -33,11 +33,11 @@ BASE_URL = "https://www.boatrace.jp"
 OUTPUT_DIR = Path("./kyotei_data")
 CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
 
-INTERVAL_MIN = 3.0      # 公式サイトなので余裕を持たせる
-INTERVAL_MAX = 6.0
-BATCH_SIZE = 20       # 20件ごとにチェックポイント保存
-BATCH_REST_MIN = 15
-BATCH_REST_MAX = 30
+INTERVAL_MIN = 1.5      # 短縮（3.0→1.5秒）公式サイトなので少し余裕を持たせる
+INTERVAL_MAX = 3.0      # 短縮（6.0→3.0秒）
+BATCH_SIZE = 20
+BATCH_REST_MIN = 5      # 短縮（15→5秒）
+BATCH_REST_MAX = 10     # 短縮（30→10秒）
 BACKOFF_BASE = 15.0
 
 # 全24競艇場コード
