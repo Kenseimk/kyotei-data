@@ -229,10 +229,11 @@ def main():
                 total_races=len(get_target_months()) * 1500
             )
     else:
-        notify_error(year, month, f"CSVが生成されませんでした: {csv_path}")
+        print(f"⚠️  CSVが見つかりません: {csv_path}")
+        print("チェックポイントは保存されているので次回resumeで再開されます。")
+        notify_error(year, month, f"CSVファイルが生成されませんでした（チェックポイントは保存済み）: {csv_path}")
         notion_log(f"❌ {year}年{month}月 CSVなし", "❌ エラー", year, month,
                    error_msg=f"CSVが生成されませんでした: {csv_path}")
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()
