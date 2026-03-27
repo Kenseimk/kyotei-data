@@ -413,7 +413,10 @@ def parse_race(jcd, hd, rno):
 
 # ========== メイン処理 ==========
 
-def scrape_month(year, month, resume=False):
+def scrape_month(year, month, resume=False, half_mode=True):
+    """
+    half_mode=True: 全レースの半分取得したらいったん返す
+    """
     print(f"\n{'='*55}")
     print(f"🚤 競艇データ収集 v1.0: {year}年{month}月")
     print(f"{'='*55}")
@@ -426,10 +429,10 @@ def scrape_month(year, month, resume=False):
     targets = get_race_dates_for_month(year, month)
     if not targets:
         print("⚠️  開催が見つかりませんでした")
-        return []
+        return all_rows, False
 
     # 各開催のレース番号を展開
-    all_races = []  # (jcd, hd, rno)
+    all_races = []
     print(f"\n🔍 レース番号取得中...")
     done_set = set(done_items)
 
@@ -440,12 +443,24 @@ def scrape_month(year, month, resume=False):
             all_races.append(key)
         human_wait()
 
+    total = len(all_races)
     remaining = [r for r in all_races if r not in done_set]
-    print(f"  未処理: {len(remaining)}件 / 全{len(all_races)}件")
+    print(f"  未処理: {len(remaining)}件 / 全{total}件")
+
+    # 半分モード: 今回の取得上限
+    if half_mode:
+        half_point = max(total // 2, 1)
+        already_done = total - len(remaining)
+        limit = max(half_point - already_done, 0)
+        if limit <= 0:
+            limit = len(remaining)
+        print(f"  今回の取得上限: {limit}件（半分モード）")
+    else:
+        limit = len(remaining)
 
     # 各レース取得
     batch_count = 0
-    for i, (jcd, hd, rno) in enumerate(tqdm(remaining, desc="レース取得")):
+    for i, (jcd, hd, rno) in enumerate(tqdm(remaining[:limit], desc="レース取得")):
         try:
             rows = parse_race(jcd, hd, int(rno))
             all_rows.extend(rows)
@@ -454,6 +469,7 @@ def scrape_month(year, month, resume=False):
             if (i + 1) % BATCH_SIZE == 0:
                 batch_count += 1
                 save_checkpoint(year, month, done_items, all_rows)
+                print(f"  📊 進捗: 累計行数={len(all_rows)}")
                 batch_rest(batch_count)
 
         except KeyboardInterrupt:
@@ -466,7 +482,11 @@ def scrape_month(year, month, resume=False):
             continue
 
     save_checkpoint(year, month, done_items, all_rows)
-    return all_rows
+    print(f"\n📊 集計: 累計行数={len(all_rows)}")
+
+    is_complete = len(done_items) >= total
+    print(f"  完了: {is_complete} (残り{total - len(done_items)}件)")
+    return all_rows, is_complete
 
 def save_month_csv(year, month, rows):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -494,10 +514,14 @@ def main():
 
     all_total = []
     for month in months:
-        rows = scrape_month(args.year, month, args.resume)
+        rows, is_complete = scrape_month(args.year, month, args.resume)
+        print(f"\n📋 scrape_month 戻り値: {len(rows)}行 / 完了={is_complete}")
+        save_month_csv(args.year, month, rows)
         if rows:
-            save_month_csv(args.year, month, rows)
             all_total.extend(rows)
+        if not is_complete:
+            print(f"\n⏸️  半分取得完了。次回resumeで残りを取得します。")
+            import sys; sys.exit(2)
 
     if len(months) > 1 and all_total:
         fp = OUTPUT_DIR / f"{args.year}_all_kyotei.csv"

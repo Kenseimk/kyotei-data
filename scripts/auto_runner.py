@@ -199,13 +199,8 @@ def main():
         cmd.append("--resume")
 
     try:
-        subprocess.run(cmd, check=True, text=True)
-    except subprocess.CalledProcessError as e:
-        elapsed = (datetime.now() - start_time).total_seconds() / 60
-        notify_error(year, month, str(e))
-        notion_log(f"❌ {year}年{month}月 エラー", "❌ エラー", year, month,
-                   elapsed_min=elapsed, error_msg=str(e))
-        sys.exit(1)
+        result = subprocess.run(cmd, check=False, text=True)
+        exit_code = result.returncode
     except Exception as e:
         elapsed = (datetime.now() - start_time).total_seconds() / 60
         notify_error(year, month, str(e))
@@ -214,20 +209,32 @@ def main():
         raise
 
     elapsed = (datetime.now() - start_time).total_seconds() / 60
+
+    if exit_code == 1:
+        notify_error(year, month, "exit code 1: スクレイパーが異常終了")
+        print("⚠️  スクレイパーが異常終了しました。")
+    elif exit_code == 2:
+        print(f"⏸️  半分取得完了。CSVをpushして次のアクションで残りを取得します。")
+
     csv_path = DATA_DIR / f"{year}_{month:02d}_kyotei.csv"
     if csv_path.exists():
         import pandas as pd
         df = pd.read_csv(csv_path, encoding='utf-8-sig')
         race_count = df['race_id'].nunique() if 'race_id' in df.columns else 0
         notify_done(year, month, race_count, len(df))
-        notion_log(f"✅ {year}年{month}月 完了", "✅ 完了", year, month,
-                   race_count=race_count, row_count=len(df), elapsed_min=elapsed)
 
-        if count_remaining() == 0:
-            notify_all_done(
-                total_months=len(get_target_months()),
-                total_races=len(get_target_months()) * 1500
-            )
+        if exit_code == 2:
+            notion_log(f"⏸️ {year}年{month}月 半分完了", "🔄 実行中", year, month,
+                       race_count=race_count, row_count=len(df), elapsed_min=elapsed,
+                       error_msg="前半取得完了。次回resumeで後半を取得します。")
+        else:
+            notion_log(f"✅ {year}年{month}月 完了", "✅ 完了", year, month,
+                       race_count=race_count, row_count=len(df), elapsed_min=elapsed)
+            if count_remaining() == 0:
+                notify_all_done(
+                    total_months=len(get_target_months()),
+                    total_races=len(get_target_months()) * 1500
+                )
     else:
         print(f"⚠️  CSVが見つかりません: {csv_path}")
         print("チェックポイントは保存されているので次回resumeで再開されます。")
