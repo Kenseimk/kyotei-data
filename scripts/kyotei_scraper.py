@@ -33,11 +33,11 @@ BASE_URL = "https://www.boatrace.jp"
 OUTPUT_DIR = Path("./kyotei_data")
 CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
 
-INTERVAL_MIN = 1.5      # 短縮（3.0→1.5秒）公式サイトなので少し余裕を持たせる
-INTERVAL_MAX = 3.0      # 短縮（6.0→3.0秒）
-BATCH_SIZE = 20
-BATCH_REST_MIN = 5      # 短縮（15→5秒）
-BATCH_REST_MAX = 10     # 短縮（30→10秒）
+INTERVAL_MIN = 0.8      # 短縮（1.5→0.8秒）
+INTERVAL_MAX = 1.5      # 短縮（3.0→1.5秒）
+BATCH_SIZE = 50         # 拡大（20→50）バッチ休憩の頻度を下げる
+BATCH_REST_MIN = 3      # 短縮（5→3秒）
+BATCH_REST_MAX = 6      # 短縮（10→6秒）
 BACKOFF_BASE = 15.0
 
 # 全24競艇場コード
@@ -132,13 +132,15 @@ def fetch(url, retries=4):
 
 # ========== チェックポイント ==========
 
-def save_checkpoint(year, month, done_items, rows):
+def save_checkpoint(year, month, done_items, rows, all_races=None):
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     cp = {
         "year": year, "month": month,
         "done_items": done_items,
         "saved_at": datetime.now().isoformat(),
     }
+    if all_races is not None:
+        cp["all_races"] = [list(r) for r in all_races]
     with open(CHECKPOINT_DIR / f"{year}_{month:02d}_checkpoint.json", "w", encoding="utf-8") as f:
         json.dump(cp, f, ensure_ascii=False, indent=2)
     if rows:
@@ -151,15 +153,18 @@ def load_checkpoint(year, month):
     cp_path = CHECKPOINT_DIR / f"{year}_{month:02d}_checkpoint.json"
     tmp_path = CHECKPOINT_DIR / f"{year}_{month:02d}_partial.csv"
     if not cp_path.exists():
-        return [], []
+        return [], [], None
     with open(cp_path, encoding="utf-8") as f:
         cp = json.load(f)
     done_items = [tuple(x) for x in cp.get("done_items", [])]
+    all_races = [tuple(x) for x in cp["all_races"]] if cp.get("all_races") else None
     rows = []
     if tmp_path.exists():
         rows = pd.read_csv(tmp_path, encoding="utf-8-sig").to_dict(orient="records")
     print(f"  📂 復元: {len(done_items)}件完了済み ({cp['saved_at']})")
-    return done_items, rows
+    if all_races:
+        print(f"  📂 レースリスト復元: {len(all_races)}件（日程スキャンをスキップ）")
+    return done_items, rows, all_races
 
 # ========== Step1: 開催日程取得 ==========
 
@@ -421,28 +426,36 @@ def scrape_month(year, month, resume=False, half_mode=True):
     print(f"🚤 競艇データ収集 v1.0: {year}年{month}月")
     print(f"{'='*55}")
 
-    done_items, all_rows = [], []
+    done_items, all_rows, all_races_cached = [], [], None
     if resume:
-        done_items, all_rows = load_checkpoint(year, month)
+        done_items, all_rows, all_races_cached = load_checkpoint(year, month)
 
-    # 開催日程取得
-    targets = get_race_dates_for_month(year, month)
-    if not targets:
-        print("⚠️  開催が見つかりませんでした")
-        return all_rows, False
+    if all_races_cached:
+        # チェックポイントからレースリストを復元（日程スキャンをスキップ）
+        all_races = all_races_cached
+        print(f"  ✅ 日程スキャンをスキップ（キャッシュ済み: {len(all_races)}件）")
+    else:
+        # 開催日程取得
+        targets = get_race_dates_for_month(year, month)
+        if not targets:
+            print("⚠️  開催が見つかりませんでした")
+            return all_rows, False
 
-    # 各開催のレース番号を展開
-    all_races = []
-    print(f"\n🔍 レース番号取得中...")
+        # 各開催のレース番号を展開
+        all_races = []
+        print(f"\n🔍 レース番号取得中...")
+        for jcd, hd in tqdm(targets, desc="開催スキャン"):
+            race_nos = parse_result_list(jcd, hd)
+            for rno in race_nos:
+                key = (jcd, hd, str(rno))
+                all_races.append(key)
+            human_wait()
+
+        # レースリストをチェックポイントに保存（次回スキャンをスキップするため）
+        save_checkpoint(year, month, done_items, all_rows, all_races)
+        print(f"  💾 レースリストをチェックポイントに保存（{len(all_races)}件）")
+
     done_set = set(done_items)
-
-    for jcd, hd in tqdm(targets, desc="開催スキャン"):
-        race_nos = parse_result_list(jcd, hd)
-        for rno in race_nos:
-            key = (jcd, hd, str(rno))
-            all_races.append(key)
-        human_wait()
-
     total = len(all_races)
     remaining = [r for r in all_races if r not in done_set]
     print(f"  未処理: {len(remaining)}件 / 全{total}件")
@@ -468,20 +481,20 @@ def scrape_month(year, month, resume=False, half_mode=True):
 
             if (i + 1) % BATCH_SIZE == 0:
                 batch_count += 1
-                save_checkpoint(year, month, done_items, all_rows)
+                save_checkpoint(year, month, done_items, all_rows, all_races)
                 print(f"  📊 進捗: 累計行数={len(all_rows)}")
                 batch_rest(batch_count)
 
         except KeyboardInterrupt:
             print("\n\n⚡ 中断 → チェックポイント保存中...")
-            save_checkpoint(year, month, done_items, all_rows)
+            save_checkpoint(year, month, done_items, all_rows, all_races)
             print("  → 次回: --resume で再開")
             raise
         except Exception as e:
             print(f"  ⚠️  スキップ {jcd}/{hd}/{rno}: {e}")
             continue
 
-    save_checkpoint(year, month, done_items, all_rows)
+    save_checkpoint(year, month, done_items, all_rows, all_races)
     print(f"\n📊 集計: 累計行数={len(all_rows)}")
 
     is_complete = len(done_items) >= total
