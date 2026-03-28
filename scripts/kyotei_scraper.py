@@ -339,13 +339,16 @@ def parse_race(jcd, hd, rno):
 
     # --- 結果ページパース ---
     # is-w495テーブルの構造:
-    #   table[0]: 着順テーブル  td[0]=着順(全角), td[1]=枠番, td[2]=登録番号+選手名, td[3]=タイム
-    #   table[1]: STテーブル    td[0]="コース番号 .ST" (例: "1 .12")
-    #   table[2+]: 払戻テーブル
+    #   table[0]: 着順テーブル  th=[着,枠,ボートレーサー,レースタイム]
+    #   table[1]: STテーブル    div内に course番号(span.table1_boatImage1Number) +
+    #                            枠番(img src=img_boat2_X.png) + ST(span.table1_boatImage1TimeInner)
+    #   table[2]: 払戻テーブル  th=[勝式,組番,払戻金,人気]
+    #   table[3]: 備考
     result_lookup = {}   # waku → {rank, result_time}
-    st_by_course = {}    # course → st  (コース番号→スタートタイム)
-    payout_text = ""
-    weather_info = {}
+    course_by_waku = {}  # waku → course (枠番→コース番号)
+    st_by_waku = {}      # waku → st (枠番→スタートタイム)
+    payout = {}          # 払戻情報
+    weather_data = {}    # 気象情報
 
     if soup_result:
         try:
@@ -367,40 +370,120 @@ def parse_race(jcd, hd, rno):
                         "result_time": time_td,
                     }
 
-            # table[1]: STテーブル "1 .12" → course=1, st=.12
+            # table[1]: STテーブル
+            # 各rowのdiv内: course番号(span.table1_boatImage1Number) +
+            #                枠番(img src="img_boat2_X.png") + ST(span.table1_boatImage1TimeInner)
             if len(is_tables) >= 2:
                 for row in is_tables[1].find_all("tr"):
-                    tds = row.find_all("td")
-                    if len(tds) == 1:
-                        cell = tds[0].get_text(strip=True)
-                        m = re.match(r'^(\d)\s*\.([\d]+)', cell)
+                    div = row.find("div", class_=re.compile(r"table1_boatImage1"))
+                    if not div:
+                        continue
+                    # コース番号
+                    course_span = div.find("span", class_=re.compile(r"table1_boatImage1Number"))
+                    course = course_span.get_text(strip=True) if course_span else ""
+                    # 枠番（img_boat2_X.png のX）
+                    img = div.find("img")
+                    waku_from_img = ""
+                    if img and img.get("src"):
+                        m = re.search(r'img_boat2_(\d)', img["src"])
                         if m:
-                            st_by_course[m.group(1)] = "." + m.group(2)
+                            waku_from_img = m.group(1)
+                    # ST
+                    st_span = div.find("span", class_="table1_boatImage1TimeInner")
+                    st_text = ""
+                    if st_span:
+                        raw = st_span.get_text(strip=True)
+                        m = re.search(r'\.([\d]+)', raw)
+                        if m:
+                            st_text = "." + m.group(1)
+                    if waku_from_img and course:
+                        course_by_waku[waku_from_img] = course
+                        st_by_waku[waku_from_img] = st_text
 
-            # 払戻金（table[2+]）
-            payout_parts = []
-            for table in is_tables[2:]:
-                t_text = table.get_text(" ", strip=True)
-                if any(k in t_text for k in ("3連単", "3連複", "2連単")):
-                    payout_parts.append(t_text[:300])
-            payout_text = " | ".join(payout_parts)[:400]
+            # table[2]: 払戻テーブル
+            if len(is_tables) >= 3:
+                rows_pay = is_tables[2].find_all("tr")
+                current_type = ""
+                for row in rows_pay:
+                    tds = row.find_all("td")
+                    if len(tds) == 4:
+                        t = tds[0].get_text(strip=True)
+                        if t:
+                            current_type = t
+                        combo = tds[1].get_text(strip=True)
+                        amt_raw = tds[2].get_text(strip=True)
+                        amt = re.sub(r'[¥,￥]', '', amt_raw).strip()
+                        if current_type and combo and amt:
+                            if current_type not in payout:
+                                payout[current_type] = []
+                            payout[current_type].append((combo, amt))
+                    elif len(tds) == 3:
+                        combo = tds[0].get_text(strip=True)
+                        amt_raw = tds[1].get_text(strip=True)
+                        amt = re.sub(r'[¥,￥]', '', amt_raw).strip()
+                        if current_type and combo and amt:
+                            if current_type not in payout:
+                                payout[current_type] = []
+                            payout[current_type].append((combo, amt))
 
-            # 天候
-            weather_div = soup_result.find("div", class_=re.compile(r"weather"))
-            if weather_div:
-                weather_info["weather_text"] = weather_div.get_text(" ", strip=True)[:100]
+            # 気象情報（各項目専用クラスから取得）
+            def _wx(cls):
+                d = soup_result.find("div", class_=cls)
+                return d.get_text(strip=True) if d else ""
+
+            temp_raw = _wx("weather1_bodyUnit is-direction")
+            m = re.search(r'([\d.]+)', temp_raw)
+            if m: weather_data["temp"] = m.group(1)
+
+            weather_raw = _wx("weather1_bodyUnit is-weather")
+            if weather_raw: weather_data["weather"] = weather_raw
+
+            wind_raw = _wx("weather1_bodyUnit is-wind")
+            m = re.search(r'([\d.]+)', wind_raw)
+            if m: weather_data["wind_speed"] = m.group(1)
+
+            wtemp_raw = _wx("weather1_bodyUnit is-waterTemperature")
+            m = re.search(r'([\d.]+)', wtemp_raw)
+            if m: weather_data["water_temp"] = m.group(1)
+
+            wave_raw = _wx("weather1_bodyUnit is-wave")
+            m = re.search(r'([\d.]+)', wave_raw)
+            if m: weather_data["wave_height"] = m.group(1)
+
+            # 決まり手（div.table1 内の th=決まり手 の次のtd）
+            for tbl in soup_result.find_all("div", class_="table1"):
+                th = tbl.find("th")
+                if th and "決まり手" in th.get_text():
+                    td = tbl.find("td")
+                    if td:
+                        weather_data["kimari_te"] = td.get_text(strip=True)
 
         except Exception:
             pass
 
+    # 払戻を整形
+    def _pay(key, idx=0):
+        """key の idx番目の払戻金額を返す"""
+        entries = payout.get(key, [])
+        return entries[idx][1] if idx < len(entries) else ""
+
+    def _combo(key, idx=0):
+        """key の idx番目の組番を返す"""
+        entries = payout.get(key, [])
+        return entries[idx][0] if idx < len(entries) else ""
+
+    # 拡連複は最大3通り
+    kakuren_combos = "|".join(c for c, _ in payout.get("拡連複", []))
+    kakuren_payouts = "|".join(a for _, a in payout.get("拡連複", []))
+    # 複勝は最大3通り
+    fukusho_wakus = "|".join(c for c, _ in payout.get("複勝", []))
+    fukusho_payouts = "|".join(a for _, a in payout.get("複勝", []))
+
     # --- 統合 ---
-    # STはコース番号→枠番の対応が取れないため、コース順(1〜6)で枠番に割り当てる
-    # ※ボートレースは枠番≠コース番号の場合があるが、暫定的にコース順を使用
     rows = []
     for waku in ["1", "2", "3", "4", "5", "6"]:
         player = players.get(waku, {"waku": waku})
         result = result_lookup.get(waku, {})
-        st = st_by_course.get(waku, "")  # コース番号=枠番として暫定割り当て
 
         row = {
             "race_id":     race_id,
@@ -409,21 +492,41 @@ def parse_race(jcd, hd, rno):
             "venue":       venue_name,
             "race_no":     rno,
             # 選手情報
-            "waku":        waku,
-            "reg_no":      player.get("reg_no", ""),
-            "player_name": player.get("player_name", ""),
-            "branch":      player.get("branch", ""),
-            "age":         player.get("age", ""),
-            "grade":       player.get("grade", ""),
-            "motor_no":    player.get("motor_no", ""),
-            "boat_no":     player.get("boat_no", ""),
+            "waku":           waku,
+            "reg_no":         player.get("reg_no", ""),
+            "player_name":    player.get("player_name", ""),
+            "branch":         player.get("branch", ""),
+            "age":            player.get("age", ""),
+            "grade":          player.get("grade", ""),
+            "motor_no":       player.get("motor_no", ""),
+            "boat_no":        player.get("boat_no", ""),
             # レース結果
-            "rank":        result.get("rank", ""),
-            "result_time": result.get("result_time", ""),
-            "st":          st,
-            # 払戻・天候
-            "payout":      payout_text,
-            "weather":     weather_info.get("weather_text", ""),
+            "rank":           result.get("rank", ""),
+            "result_time":    result.get("result_time", ""),
+            "course":         course_by_waku.get(waku, ""),
+            "st":             st_by_waku.get(waku, ""),
+            # 払戻（レース共通: 全waku同値）
+            "sanrentan_combo":   _combo("3連単"),
+            "sanrentan_payout":  _pay("3連単"),
+            "sanrenpuku_combo":  _combo("3連複"),
+            "sanrenpuku_payout": _pay("3連複"),
+            "niren_tan_combo":   _combo("2連単"),
+            "niren_tan_payout":  _pay("2連単"),
+            "niren_puku_combo":  _combo("2連複"),
+            "niren_puku_payout": _pay("2連複"),
+            "kakuren_combos":    kakuren_combos,
+            "kakuren_payouts":   kakuren_payouts,
+            "tansho_waku":       _combo("単勝"),
+            "tansho_payout":     _pay("単勝"),
+            "fukusho_wakus":     fukusho_wakus,
+            "fukusho_payouts":   fukusho_payouts,
+            # 気象情報（レース共通）
+            "temp":        weather_data.get("temp", ""),
+            "weather":     weather_data.get("weather", ""),
+            "wind_speed":  weather_data.get("wind_speed", ""),
+            "water_temp":  weather_data.get("water_temp", ""),
+            "wave_height": weather_data.get("wave_height", ""),
+            "kimari_te":   weather_data.get("kimari_te", ""),
         }
         rows.append(row)
 
