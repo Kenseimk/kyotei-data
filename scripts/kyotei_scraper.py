@@ -231,6 +231,12 @@ def parse_result_list(jcd, hd):
                 race_nos.append(rno)
     return sorted(race_nos)
 
+ZEN2HAN = str.maketrans("０１２３４５６７８９", "0123456789")
+
+def z2h(s):
+    """全角数字→半角数字"""
+    return s.translate(ZEN2HAN)
+
 def parse_race(jcd, hd, rno):
     """
     1レース分のデータを取得。
@@ -254,139 +260,147 @@ def parse_race(jcd, hd, rno):
         return []
 
     # --- 出走表パース ---
-    players = {}  # waku → {name, branch, age, grade, motor, boat, win_rate, local_win_rate, f, l, avg_st}
+    # 実際のHTML構造:
+    #   td[0] = 枠番（全角 '１'〜'６'）
+    #   td[2] = <div class="is-fs11">登録番号 / 級別</div>
+    #           <div class="is-fs18"><a>選手名</a></div>
+    #           <div class="is-fs11">支部/支部 年齢歳/体重kg</div>
+    #   td[3] = F数 L数 平均ST
+    #   td[6] = モーター番号 2連率 3連率
+    #   td[7] = ボート番号 2連率 3連率
+    players = {}
     if soup_list:
         try:
-            tbody = soup_list.find("tbody", class_=re.compile(r"is-fs"))
-            if not tbody:
-                tbody = soup_list.find("table", class_=re.compile(r"is-w[0-9]"))
-
-            # テーブルから選手情報を取得
-            tables = pd.read_html(str(soup_list))
-            for t in tables:
-                cols = " ".join(str(c) for c in t.columns)
-                if "選手名" in cols or "登録番号" in cols or len(t.columns) >= 5:
-                    if len(t) >= 6:  # 最低6選手
-                        for _, row in t.iterrows():
-                            vals = [str(v) for v in row.values]
-                            # 枠番(1-6)を探す
-                            for i, v in enumerate(vals):
-                                if re.match(r'^[1-6]$', v.strip()):
-                                    waku = v.strip()
-                                    players[waku] = {
-                                        "waku": waku,
-                                        "raw": " ".join(vals),
-                                    }
-                                    break
-                        break
-        except Exception:
-            pass
-
-        # BeautifulSoupで直接パース（より確実）
-        players = {}
-        try:
-            # 選手名セル: class="is-fs12"など
-            player_rows = soup_list.select("table tbody tr") or soup_list.select("tr.is-")
-            waku = 1
             for row in soup_list.find_all("tr"):
                 tds = row.find_all("td")
-                if len(tds) < 3:
+                if len(tds) < 8:
                     continue
-                # 枠番セル
-                waku_td = tds[0].get_text(strip=True)
-                if not re.match(r'^[1-6]$', waku_td):
+                # 枠番は必ず全角（'１'〜'６'）の行のみ処理
+                # 半角数字の行はサブ行（展示タイム等）のため除外
+                waku_raw = tds[0].get_text(strip=True)
+                if waku_raw not in "１２３４５６":
                     continue
-                waku = waku_td
+                waku = z2h(waku_raw)
 
-                # 選手名・登録番号
-                name_td = tds[2].get_text("\n", strip=True) if len(tds) > 2 else ""
-                name_parts = name_td.split("\n")
-                reg_no = name_parts[0] if name_parts else ""
-                name = name_parts[1] if len(name_parts) > 1 else ""
+                # 選手情報（tds[2]のネストdivから個別取得）
+                # divs=0のサブ行（後出コースやST行）はスキップ
+                reg_no = ""
+                player_name = ""
+                branch = ""
+                age = ""
+                grade = ""
+                divs = tds[2].find_all("div")
+                if not divs:
+                    continue
+                if divs:
+                    # div[0]: "3839 / B1" → 登録番号・級別
+                    d0 = divs[0].get_text(" ", strip=True)
+                    m = re.search(r'(\d{4})', d0)
+                    if m:
+                        reg_no = m.group(1)
+                    g = re.search(r'([A-Ba-b]\d)', d0)
+                    if g:
+                        grade = g.group(1).upper()
+                    # div[1]: 選手名
+                    if len(divs) > 1:
+                        player_name = divs[1].get_text(strip=True)
+                    # div[2]: "静岡/静岡 47歳/62.1kg"
+                    if len(divs) > 2:
+                        info = divs[2].get_text(" ", strip=True)
+                        bm = re.search(r'(\S+)/\S+\s+(\d+)歳', info)
+                        if bm:
+                            branch = bm.group(1)
+                            age = bm.group(2)
 
-                # 支部・年齢
-                branch_age = tds[3].get_text("\n", strip=True) if len(tds) > 3 else ""
-                ba_parts = branch_age.split("\n")
+                # モーター番号（tds[6]の先頭数値）
+                motor_no = ""
+                m = re.search(r'^(\d+)', tds[6].get_text(strip=True))
+                if m:
+                    motor_no = m.group(1)
 
-                # 各種成績
-                motor_no   = tds[4].get_text(strip=True) if len(tds) > 4 else ""
-                boat_no    = tds[5].get_text(strip=True) if len(tds) > 5 else ""
+                # ボート番号（tds[7]の先頭数値）
+                boat_no = ""
+                m = re.search(r'^(\d+)', tds[7].get_text(strip=True))
+                if m:
+                    boat_no = m.group(1)
 
                 players[waku] = {
-                    "waku":       waku,
-                    "reg_no":     reg_no,
-                    "player_name": name or name_td[:10],
-                    "branch":     ba_parts[0] if ba_parts else "",
-                    "age":        ba_parts[1] if len(ba_parts) > 1 else "",
-                    "grade":      ba_parts[2] if len(ba_parts) > 2 else "",
-                    "motor_no":   motor_no,
-                    "boat_no":    boat_no,
+                    "waku":        waku,
+                    "reg_no":      reg_no,
+                    "player_name": player_name,
+                    "branch":      branch,
+                    "age":         age,
+                    "grade":       grade,
+                    "motor_no":    motor_no,
+                    "boat_no":     boat_no,
                 }
         except Exception:
             pass
 
     # --- 結果ページパース ---
-    result_lookup = {}   # waku → {rank, time, course, st, finish_type}
+    # is-w495テーブルの構造:
+    #   table[0]: 着順テーブル  td[0]=着順(全角), td[1]=枠番, td[2]=登録番号+選手名, td[3]=タイム
+    #   table[1]: STテーブル    td[0]="コース番号 .ST" (例: "1 .12")
+    #   table[2+]: 払戻テーブル
+    result_lookup = {}   # waku → {rank, result_time}
+    st_by_course = {}    # course → st  (コース番号→スタートタイム)
     payout_text = ""
     weather_info = {}
 
     if soup_result:
         try:
-            # 着順テーブル
-            for row in soup_result.find_all("tr"):
-                tds = row.find_all("td")
-                if len(tds) < 4:
-                    continue
-                rank_td = tds[0].get_text(strip=True)
-                if not re.match(r'^[1-6]$', rank_td):
-                    continue
-                waku_td = tds[1].get_text(strip=True)
-                name_td = tds[2].get_text(strip=True) if len(tds) > 2 else ""
-                time_td = tds[3].get_text(strip=True) if len(tds) > 3 else ""
+            is_tables = soup_result.find_all("table", class_="is-w495")
 
-                result_lookup[waku_td] = {
-                    "rank":        rank_td,
-                    "result_time": time_td,
-                }
+            # table[0]: 着順テーブル
+            if is_tables:
+                for row in is_tables[0].find_all("tr"):
+                    tds = row.find_all("td")
+                    if len(tds) < 4:
+                        continue
+                    rank = z2h(tds[0].get_text(strip=True))
+                    if not re.match(r'^[1-6]$', rank):
+                        continue
+                    waku_td = tds[1].get_text(strip=True)
+                    time_td = tds[3].get_text(strip=True)
+                    result_lookup[waku_td] = {
+                        "rank":        rank,
+                        "result_time": time_td,
+                    }
 
-            # コース・STテーブル（スタート情報）
-            # class="is-colo1"などのSTセル
-            st_rows = soup_result.select("table.is-w495 tr") or []
-            for row in st_rows:
-                tds = row.find_all("td")
-                if len(tds) >= 3:
-                    course = tds[0].get_text(strip=True)
-                    waku_in_st = tds[1].get_text(strip=True)
-                    st = tds[2].get_text(strip=True)
-                    if re.match(r'^[1-6]$', waku_in_st):
-                        if waku_in_st in result_lookup:
-                            result_lookup[waku_in_st]["course"] = course
-                            result_lookup[waku_in_st]["st"] = st
+            # table[1]: STテーブル "1 .12" → course=1, st=.12
+            if len(is_tables) >= 2:
+                for row in is_tables[1].find_all("tr"):
+                    tds = row.find_all("td")
+                    if len(tds) == 1:
+                        cell = tds[0].get_text(strip=True)
+                        m = re.match(r'^(\d)\s*\.([\d]+)', cell)
+                        if m:
+                            st_by_course[m.group(1)] = "." + m.group(2)
 
-            # 払戻金
+            # 払戻金（table[2+]）
             payout_parts = []
-            for table in soup_result.find_all("table"):
+            for table in is_tables[2:]:
                 t_text = table.get_text(" ", strip=True)
-                if "3連単" in t_text or "3連複" in t_text or "2連単" in t_text:
+                if any(k in t_text for k in ("3連単", "3連複", "2連単")):
                     payout_parts.append(t_text[:300])
             payout_text = " | ".join(payout_parts)[:400]
 
-            # 天候・風速・波高
-            try:
-                weather_div = soup_result.find("div", class_=re.compile(r"weather"))
-                if weather_div:
-                    weather_info["weather_text"] = weather_div.get_text(" ", strip=True)[:100]
-            except Exception:
-                pass
+            # 天候
+            weather_div = soup_result.find("div", class_=re.compile(r"weather"))
+            if weather_div:
+                weather_info["weather_text"] = weather_div.get_text(" ", strip=True)[:100]
 
-        except Exception as e:
+        except Exception:
             pass
 
     # --- 統合 ---
+    # STはコース番号→枠番の対応が取れないため、コース順(1〜6)で枠番に割り当てる
+    # ※ボートレースは枠番≠コース番号の場合があるが、暫定的にコース順を使用
     rows = []
     for waku in ["1", "2", "3", "4", "5", "6"]:
         player = players.get(waku, {"waku": waku})
         result = result_lookup.get(waku, {})
+        st = st_by_course.get(waku, "")  # コース番号=枠番として暫定割り当て
 
         row = {
             "race_id":     race_id,
@@ -406,8 +420,7 @@ def parse_race(jcd, hd, rno):
             # レース結果
             "rank":        result.get("rank", ""),
             "result_time": result.get("result_time", ""),
-            "course":      result.get("course", ""),
-            "st":          result.get("st", ""),
+            "st":          st,
             # 払戻・天候
             "payout":      payout_text,
             "weather":     weather_info.get("weather_text", ""),
