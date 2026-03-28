@@ -534,9 +534,10 @@ def parse_race(jcd, hd, rno):
 
 # ========== メイン処理 ==========
 
-def scrape_month(year, month, resume=False, half_mode=True):
+def scrape_month(year, month, resume=False, half_mode=False):
     """
-    half_mode=True: 全レースの半分取得したらいったん返す
+    half_mode=False: 全レースを1アクションで取得（チェックポイントで安全に再開可能）
+    half_mode=True:  全レースの半分取得したらいったん返す（旧動作）
     """
     print(f"\n{'='*55}")
     print(f"🚤 競艇データ収集 v1.0: {year}年{month}月")

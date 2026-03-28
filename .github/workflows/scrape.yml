@@ -59,6 +59,7 @@ jobs:
           else
             TODAY=$(date '+%Y-%m-%d %H:%M')
             git commit -m "🚤 競艇データ自動更新 ${TODAY}"
+            git pull --rebase origin main
             git push
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
@@ -67,26 +68,59 @@ jobs:
         if: steps.git_push.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_YEAR: ${{ github.event.inputs.force_year }}
+          FORCE_MONTH: ${{ github.event.inputs.force_month }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          REMAINING=$(python -c "
+          python -c "
+          import subprocess, os, sys
           from pathlib import Path
-          from datetime import datetime
-          data_dir = Path('kyotei_data')
-          now = datetime.now()
-          remaining = 0
-          y, m = 2023, 1
-          while (y, m) <= (now.year, now.month):
-              if not (data_dir / f'{y}_{m:02d}_kyotei.csv').exists():
-                  remaining += 1
-              m += 1
-              if m > 12:
-                  m, y = 1, y + 1
-          print(remaining)
-          ")
-          echo "残り: ${REMAINING}ヶ月"
-          if [ "$REMAINING" -gt "0" ]; then
-            echo "次の月を即座に起動..."
-            gh workflow run scrape.yml --repo $GITHUB_REPOSITORY
-          else
-            echo "🎉 全月収集完了！"
-          fi
+
+          force_year  = os.environ.get('FORCE_YEAR', '').strip()
+          force_month = os.environ.get('FORCE_MONTH', '').strip()
+          repo        = os.environ.get('GITHUB_REPOSITORY', '')
+
+          def run_workflow(fy, fm):
+              args = ['gh', 'workflow', 'run', 'scrape.yml', '--repo', repo]
+              if fy and fm:
+                  args += ['-f', f'force_year={fy}', '-f', f'force_month={fm}']
+              subprocess.run(args, check=True)
+
+          if force_year and force_month:
+              year  = int(force_year)
+              month = int(force_month)
+              csv   = Path('kyotei_data') / f'{year}_{month:02d}_kyotei.csv'
+
+              if csv.exists():
+                  # 月完了 → 次の月へ
+                  month += 1
+                  if month > 12:
+                      month = 1
+                      year += 1
+                  # 収集範囲（2025年12月）を超えたら終了
+                  if year > 2025 or (year == 2025 and month > 12):
+                      print(f'✅ {force_year}年の全データ収集完了！')
+                      sys.exit(0)
+                  print(f'次の月を起動: {year}年{month}月')
+                  run_workflow(year, month)
+              else:
+                  # 未完了 → 同じ月を再実行（resume）
+                  print(f'同月の続きを実行: {year}年{month}月')
+                  run_workflow(year, month)
+          else:
+              # 自動検出モード（scheduleトリガー等）
+              from datetime import datetime
+              data_dir = Path('kyotei_data')
+              now = datetime.now()
+              remaining = 0
+              y, m = 2023, 1
+              while (y, m) <= (now.year, now.month):
+                  if not (data_dir / f'{y}_{m:02d}_kyotei.csv').exists():
+                      remaining += 1
+                  m += 1
+                  if m > 12:
+                      m, y = 1, y + 1
+              print(f'残り: {remaining}ヶ月')
+              if remaining > 0:
+                  run_workflow('', '')
+          "
