@@ -1,4 +1,4 @@
-kyotei_data/checkpoints/*.json
+# チェックポイントJSONはresumeに必要なため追跡する（削除）
 __pycache__/
 *.pyc
 .venv/
