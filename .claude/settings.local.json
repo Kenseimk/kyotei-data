@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(gh run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh workflow:*)",
+      "Bash(gh api:*)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''''status:'''', d[''''status'''']\\); print\\(''''conclusion:'''', d[''''conclusion'''']\\); print\\(''''started:'''', d[''''run_started_at'''']\\); print\\(''''updated:'''', d[''''updated_at'''']\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(python -X utf8 -c \":*)",
+      "Bash(git checkout:*)",
+      "Bash(ls kyotei_data/*.csv)",
+      "Bash(wc -l kyotei_data/checkpoints/*.csv)",
+      "Bash(git pull:*)"
+    ]
+  }
+}
